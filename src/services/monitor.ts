@@ -1,6 +1,5 @@
 import { GetCommand, PutCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { PublishCommand } from '@aws-sdk/client-sns';
-import { randomUUID } from 'node:crypto';
 import { config } from '../lib/config';
 import { docClient, snsClient } from '../lib/aws';
 import { logger } from '../lib/logger';
