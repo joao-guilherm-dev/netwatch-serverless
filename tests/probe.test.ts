@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { probeTarget } from '../src/services/probe';
 import type { Target } from '../src/models';
 const base: Target = { id: 'test', name: 'example', type: 'http', host: 'http://example.com', expectedStatus: 200, intervalSeconds: 300, enabled: true, createdAt: '', updatedAt: '' };
