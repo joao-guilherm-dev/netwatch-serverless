@@ -1,0 +1,32 @@
+name: Deploy
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Environment
+        type: choice
+        options: [dev, prod]
+        required: true
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stage }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run typecheck && npm run lint && npm test && npm run build
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - run: npx serverless deploy --stage "${{ inputs.stage }}" --region "${{ vars.AWS_REGION || 'us-east-1' }}"
+        env:
+          COGNITO_ISSUER: ${{ secrets.COGNITO_ISSUER }}
+          COGNITO_CLIENT_ID: ${{ secrets.COGNITO_CLIENT_ID }}
+          ENABLE_DELETION_PROTECTION: 'true'

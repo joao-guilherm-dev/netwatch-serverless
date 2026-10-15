@@ -1,0 +1,135 @@
+service: netwatch-serverless
+frameworkVersion: '4'
+configValidationMode: error
+useDotenv: true
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  architecture: arm64
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256
+  timeout: 15
+  logRetentionInDays: 30
+  versionFunctions: true
+  tracing:
+    lambda: true
+    apiGateway: true
+  httpApi:
+    authorizers:
+      cognitoAuthorizer:
+        type: jwt
+        identitySource: '$request.header.Authorization'
+        issuerUrl: ${env:COGNITO_ISSUER}
+        audience:
+          - ${env:COGNITO_CLIENT_ID}
+  environment:
+    STAGE: ${sls:stage}
+    TARGETS_TABLE: !Ref TargetsTable
+    CHECKS_TABLE: !Ref ChecksTable
+    ALERT_TOPIC_ARN: !Ref AlertsTopic
+    CHECK_TIMEOUT_MS: '8000'
+    CHECKS_TTL_DAYS: '30'
+    LOG_LEVEL: INFO
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query, dynamodb:Scan]
+          Resource:
+            - !GetAtt TargetsTable.Arn
+            - !GetAtt ChecksTable.Arn
+            - !Join ['', [!GetAtt ChecksTable.Arn, '/index/*']]
+        - Effect: Allow
+          Action: [sns:Publish]
+          Resource: !Ref AlertsTopic
+
+package:
+  individually: true
+  patterns:
+    - '!tests/**'
+    - '!coverage/**'
+    - '!README.md'
+    - '!*.md'
+    - '!.github/**'
+
+functions:
+  monitor:
+    handler: .dist/src/handlers/monitor.handler
+    timeout: 60
+    memorySize: 512
+    reservedConcurrency: 2
+    events:
+      - schedule:
+          rate: rate(5 minutes)
+          enabled: true
+          input:
+            source: netwatch.schedule
+    environment:
+      MAX_TARGETS_PER_RUN: '100'
+  createTarget:
+    handler: .dist/src/handlers/api.createTarget
+    events:
+      - httpApi: { method: POST, path: /targets, authorizer: cognitoAuthorizer }
+  listTargets:
+    handler: .dist/src/handlers/api.listTargets
+    events:
+      - httpApi: { method: GET, path: /targets, authorizer: cognitoAuthorizer }
+  updateTarget:
+    handler: .dist/src/handlers/api.updateTarget
+    events:
+      - httpApi: { method: PATCH, path: /targets/{id}, authorizer: cognitoAuthorizer }
+  deleteTarget:
+    handler: .dist/src/handlers/api.deleteTarget
+    events:
+      - httpApi: { method: DELETE, path: /targets/{id}, authorizer: cognitoAuthorizer }
+  listChecks:
+    handler: .dist/src/handlers/api.listChecks
+    events:
+      - httpApi: { method: GET, path: /targets/{id}/checks, authorizer: cognitoAuthorizer }
+
+resources:
+  Resources:
+    TargetsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${sls:stage}-targets
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions: [{ AttributeName: id, AttributeType: S }]
+        KeySchema: [{ AttributeName: id, KeyType: HASH }]
+        PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+        SSESpecification: { SSEEnabled: true }
+        DeletionProtectionEnabled: ${strToBool(${env:ENABLE_DELETION_PROTECTION, 'false'})}
+        Tags: [{ Key: Application, Value: netwatch }, { Key: Environment, Value: ${sls:stage} }]
+    ChecksTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${sls:stage}-checks
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - { AttributeName: targetId, AttributeType: S }
+          - { AttributeName: checkedAt, AttributeType: S }
+        KeySchema:
+          - { AttributeName: targetId, KeyType: HASH }
+          - { AttributeName: checkedAt, KeyType: RANGE }
+        TimeToLiveSpecification: { AttributeName: expiresAt, Enabled: true }
+        SSESpecification: { SSEEnabled: true }
+        PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+        Tags: [{ Key: Application, Value: netwatch }, { Key: Environment, Value: ${sls:stage} }]
+    AlertsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-${sls:stage}-alerts
+        KmsMasterKeyId: alias/aws/sns
+        Tags: [{ Key: Application, Value: netwatch }, { Key: Environment, Value: ${sls:stage} }]
+    ApiLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:service}-${sls:stage}-monitor
+        RetentionInDays: 30
+  Outputs:
+    ApiEndpoint: { Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com' }
+    TargetsTableName: { Value: !Ref TargetsTable }
+    ChecksTableName: { Value: !Ref ChecksTable }
+    AlertsTopicArn: { Value: !Ref AlertsTopic }

@@ -1,0 +1,8 @@
+node_modules/
+.dist/
+.serverless/
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
